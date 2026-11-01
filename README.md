@@ -312,6 +312,15 @@ ELECTRON_RUN_AS_NODE=1 "D:\DeepSeek Harness\DeepSeek Harness.exe" tests/host-int
 
 # 4. 真实推理：走 adapter.prepareCall -> stream 完整路径，断言输出含 4277
 ELECTRON_RUN_AS_NODE=1 "D:\DeepSeek Harness\DeepSeek Harness.exe" tests/real-inference.mjs
+
+# 5. 长 prompt：13 万字符走 stdin（守住 ENAMETOOLONG 那条修复）
+node tests/long-prompt.mjs
+```
+
+装完之后用一条命令体检：
+
+```bash
+node tools/diagnose.mjs
 ```
 
 > Windows 上必须用 `ELECTRON_RUN_AS_NODE=1` + DSH 主程序跑测试 3/4：
@@ -366,8 +375,34 @@ ELECTRON_RUN_AS_NODE=1 "D:\DeepSeek Harness\DeepSeek Harness.exe" tests/real-inf
 | **不支持工具调用（tool calling）** | `opencode run` 只接受单条 message，没有多轮 tool 结构 | DSH 的 agent 工具链在这个 provider 上跑不通；纯对话可用 |
 | **不支持图片输入** | CLI 的 `run` 通道只传文本 | 模型标了 `image` 能力，但图片会被丢弃 |
 | **首字节延迟 3–5 秒** | CLI 是事件级流（step_start→text→step_finish），不是 token 级 | shim 会等文本到齐后按标点切块下发 SSE；不是逐字流 |
+| ~~prompt 长度受命令行限制~~ | 已修复：长 prompt 改走 stdin | DSH 的 system prompt 动辄上万字，argv 会 `ENAMETOOLONG` |
 | **额度由 OpenCode 账号决定** | 免费额度是上游控制的 | 用尽后返回 `FreeUsageLimitError`，插件会把原文透出给用户 |
 | **依赖本机装有 OpenCode** | 推理必须由官方 CLI 发起 | 没装 OpenCode 时插件记一条 error 并静默不注册 provider |
+
+### 坑 3：长 prompt 不能走 argv（`spawn ENAMETOOLONG`）
+
+在 GUI 里用 OpenCode Free 发第一条消息时，可能拿到：
+
+```
+502 {"type":"upstream_error","message":"spawn ENAMETOOLONG","code":"ENAMETOOLONG"}
+```
+
+原因是 DSH 每次请求都带上万字的 system prompt（工具说明、harness 规则、Code Mode 目录…），
+而早期实现把整个 prompt 拼进 `opencode-cli` 的**命令行参数**。
+Windows 的 `CreateProcess` 整条命令行上限 32767 字节，远超即失败。
+
+本机实测：
+
+| 方式 | prompt 长度 | 结果 |
+|---|---|---|
+| argv | 40000 字符 | `Argument list too long` |
+| argv | 134033 字符 | 失败（DSH 真实请求体量） |
+| **stdin** | 134033 字符 | **成功**，5.1s 返回 |
+
+修复方式：`cli-bridge.js` 按长度分流 —— 短 prompt（≤4000 字符）仍走 argv，
+长 prompt 走 stdin（`opencode-cli` 在没给 message 参数时读标准输入，实测可用）。
+
+`tests/long-prompt.mjs` 用 13 万字符的 prompt 守住这条路径，同时验证短 prompt 没被改坏。
 
 ---
 
