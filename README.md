@@ -100,48 +100,111 @@ opencode-cli --standalone run --format json --model opencode/<id> "<prompt>"
 
 ## 安装
 
-### 前置
+### 前置（两件事，缺一不可）
 
-1. 装好 **OpenCode 桌面版**（https://opencode.ai），确认
-   `%APPDATA%\ai.opencode.desktop\cli\<ver>-<arch>\opencode-cli.exe` 存在。
-   Linux/macOS 上则是 `~/.local/bin/opencode`。
-2. DSH 用这个 profile 启动过至少一次（`~/.dsh/profiles/desktop` 存在）。
+1. **装好 OpenCode 桌面版** —— 推理由它的 CLI 发起。
+   下载：https://opencode.ai
 
-### 一条命令
+   装完后确认 CLI 存在：
+
+   ```bash
+   # Windows
+   dir "%APPDATA%\ai.opencode.desktop\cli"
+   # Linux / macOS
+   ls ~/.local/bin/opencode
+   ```
+
+   > 插件会自动扫 `%APPDATA%\ai.opencode.desktop\cli\<版本>-<架构>\opencode-cli.exe`，
+   > 版本号变了也不用改配置。
+
+2. **DSH 用目标 profile 启动过至少一次**，让 `~/.dsh/profiles/desktop` 目录存在。
+
+不需要 API Key，不需要登录 OpenCode 账号。
+
+### 安装（三条命令）
 
 ```bash
+git clone https://github.com/0Sakura721/dsh-opencodeconnect-nokey.git
+cd dsh-opencodeconnect-nokey
 node install.mjs
-# 或指定 profile
-node install.mjs --profile web
-# 只看计划不写盘
-node install.mjs --dry-run
 ```
 
-`install.mjs` 做三件事：
-1. 复制包文件到 `<profile>/node_modules/dsh-opencodeconnect-nokey/`
-2. 往 `<profile>/cordis.patch.yml` 追加挂载行
-3. 把包名加进 `<profile>/package.json` 的 `dsh.profile.bundles`
+然后**重启 DSH**。
 
-**然后重启 DSH。**
+`install.mjs` 做四件事，全部打印出来：
 
-> 为什么不走 `dsh plugin add`：本机 profile 的 `pnpm-lock.yaml` 与 registry
-> integrity 对不上，pnpm 会拒绝写入（"downloaded tarball does not match the
-> integrity recorded in the lockfile"）。本插件零依赖，复制安装完全可行且更安全 ——
-> 它不会动你的 lockfile。
+```
+profile    = C:\Users\你\.dsh\profiles\desktop
+安装目标   = ...\node_modules\dsh-opencodeconnect-nokey
+patch 文件 = ...\cordis.patch.yml
+  copy package.json
+  copy cordis.patch.yml
+  copy lib/cli-bridge.js
+  copy lib/index.js
+  copy lib/shim.js
+  patch 行已追加
+  bundles 已追加
+```
 
-### 手动安装
+先用 `--dry-run` 看一眼计划不写盘，换 profile 用 `--profile`：
 
-1. 复制 `lib/`、`package.json`、`cordis.patch.yml` 到
+```bash
+node install.mjs --dry-run          # 只看计划
+node install.mjs --profile web      # 装到 web profile
+```
+
+脚本是幂等的：重复跑不会产生重复挂载行；改 `cordis.patch.yml` 前会留一份 `.bak`。
+
+### 脚本到底改了哪三处
+
+| 位置 | 动作 |
+|---|---|
+| `<profile>/node_modules/dsh-opencodeconnect-nokey/` | 复制插件文件 |
+| `<profile>/cordis.patch.yml` | 追加 `- insert:` 挂载行 |
+| `<profile>/package.json` → `dsh.profile.bundles` | 追加包名 |
+
+> **为什么不用 `dsh plugin add`**
+>
+> 本机 profile 的 `pnpm-lock.yaml` 与 registry integrity 对不上，pnpm 会直接拒绝：
+>
+> ```
+> The downloaded tarball does not match the integrity recorded in the lockfile.
+> ```
+>
+> 本插件**零运行时依赖**（宿主模块全部从 asar 动态导入），复制安装完全可行，
+> 而且**不会动你的 lockfile** —— 比让 pnpm 重写一遍更安全。
+
+### 手动安装（不想跑脚本）
+
+1. 把 `lib/`、`package.json`、`cordis.patch.yml` 复制到
    `~/.dsh/profiles/desktop/node_modules/dsh-opencodeconnect-nokey/`
-2. 在 `~/.dsh/profiles/desktop/cordis.patch.yml` 末尾加：
+2. 在 `~/.dsh/profiles/desktop/cordis.patch.yml` **末尾**追加：
 
-```yaml
-- insert:
-    - id: opencodeconnect-nokey
-      name: dsh-opencodeconnect-nokey
+   ```yaml
+   - insert:
+       - id: opencodeconnect-nokey
+         name: dsh-opencodeconnect-nokey
+   ```
+
+   > ⚠️ 如果你的 patch 文件内容是空数组 `[]`，**要先把它删掉**再追加。
+   > `[]` 已经是完整的 YAML 流式空序列，后面跟 `- insert:` 会变成非法 YAML，
+   > profile 直接起不来。`install.mjs` 会自动处理这种情况（有回归测试守着）。
+3. 重启 DSH
+
+### 卸载
+
+```bash
+node -e "
+const fs=require('fs'),os=require('os'),path=require('path');
+const d=path.join(os.homedir(),'.dsh','profiles','desktop');
+fs.rmSync(path.join(d,'node_modules','dsh-opencodeconnect-nokey'),{recursive:true,force:true});
+const p=path.join(d,'cordis.patch.yml');
+fs.writeFileSync(p, fs.readFileSync(p,'utf8').replace(/\n# dsh-opencodeconnect-nokey[\s\S]*?(?=\n#|\n- id:|\Z)/,'').replace(/\n- insert:\n    - id: opencodeconnect-nokey\n      name: dsh-opencodeconnect-nokey\n?/,''));
+console.log('已卸载，重启 DSH 生效');
+"
 ```
 
-3. 重启 DSH
+或直接删掉 `node_modules/dsh-opencodeconnect-nokey/` 和 `cordis.patch.yml` 里那三行，再重启。
 
 ---
 
@@ -163,18 +226,25 @@ node install.mjs --dry-run
 ### 本地测试（不需要 DSH 重启）
 
 ```bash
-# 1. 纯 shim 冒烟：起 shim，打一次 /v1/models + 一次非流式 + 一次流式
+# 1. 安装脚本回归：空文件 / [] 空数组 / 只有注释 / 已有真实 patch 四种 profile 状态
+ELECTRON_RUN_AS_NODE=1 "D:\DeepSeek Harness\DeepSeek Harness.exe" tests/install-test.mjs
+
+# 2. 纯 shim 冒烟：起 shim，打一次 /v1/models + 一次非流式 + 一次流式
 node tests/smoke.mjs
 
-# 2. 宿主集成：在宿主环境里 load apply()，检查 registerAdapter 与 listModels
-#    Windows 用 Electron 的 node 形态（这样才能从 process.execPath 推出 asar）
+# 3. 宿主集成：在宿主环境里 load apply()，检查 registerAdapter 与 listModels
 ELECTRON_RUN_AS_NODE=1 "D:\DeepSeek Harness\DeepSeek Harness.exe" tests/host-integration.mjs
 
-# 3. 真实推理：走 adapter.prepareCall -> stream 完整路径，断言输出含 4277
+# 4. 真实推理：走 adapter.prepareCall -> stream 完整路径，断言输出含 4277
 ELECTRON_RUN_AS_NODE=1 "D:\DeepSeek Harness\DeepSeek Harness.exe" tests/real-inference.mjs
 ```
 
-三个测试都输出 `PASS` 即链路完整。
+> Windows 上必须用 `ELECTRON_RUN_AS_NODE=1` + DSH 主程序跑测试 3/4：
+> 只有在这种形态下 `process.execPath` 才指向 DSH 安装目录，
+> 插件才能像宿主一样从 `resources/app.asar/dsh/node_modules` 推出依赖位置。
+> 测试 1/2 用普通 `node` 即可。
+
+四个测试都输出 `PASS` 即链路完整。
 
 ---
 

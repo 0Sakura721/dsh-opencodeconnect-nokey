@@ -78,23 +78,36 @@ for (const entry of fs.readdirSync(path.join(here, 'lib'))) {
 }
 
 // ---- 2. 写 patch 层 ----
-const marker = `    - id: opencodeconnect-nokey\n      name: ${PKG_NAME}`
-let patch = exists(patchPath) ? fs.readFileSync(patchPath, 'utf8') : '[]\n'
+let patch = exists(patchPath) ? fs.readFileSync(patchPath, 'utf8') : ''
 
 if (patch.includes('id: opencodeconnect-nokey')) {
   console.log('  patch 行已存在，跳过')
 } else {
+  /**
+   * 空数组 `[]` 是 DSH 新 profile 的默认 patch。
+   *
+   * 必须把它**替换掉**而不是在后面追加 —— YAML 里 `[]` 已经是一个完整的
+   * 流式（flow）空序列，后面再跟 `- insert:` 会得到
+   * "end of the stream or a document separator is expected"，
+   * 整个 profile 都起不来。这是实测踩到的坑，不是理论风险。
+   */
+  const stripped = patch.replace(/^\s*\[\s*\]\s*$/m, '').trimEnd()
   const addition = [
-    '',
     `# ${PKG_NAME} —— 把 OpenCode 内置免费模型接入 DSH（无需 API Key）`,
     '- insert:',
     '    - id: opencodeconnect-nokey',
-    `      name: ${PKG_NAME}`,
-    ''
+    `      name: ${PKG_NAME}`
   ].join('\n')
-  patch = patch.replace(/\s*$/, '\n') + addition
-  if (!dryRun) fs.writeFileSync(patchPath, patch, 'utf8')
-  console.log('  patch 行已追加')
+
+  const body = stripped === '' ? addition + '\n' : stripped + '\n\n' + addition + '\n'
+  if (!dryRun) {
+    // 备份一次原文件，改坏了能一眼看出来
+    if (exists(patchPath) && !exists(patchPath + '.bak')) {
+      fs.copyFileSync(patchPath, patchPath + '.bak')
+    }
+    fs.writeFileSync(patchPath, body, 'utf8')
+  }
+  console.log('  patch 行已追加' + (stripped === '' ? '（原文件为空/空数组，已重置为数组根）' : ''))
 }
 
 // ---- 3. 确保 package.json 的 bundles 里有它 ----
