@@ -25,6 +25,7 @@ const log = {
 }
 
 let registered = null
+let directory = null
 const disposers = []
 
 /** 极简 cordis 上下文替身：只提供这个插件真正用到的那几个面。 */
@@ -44,6 +45,11 @@ const ctx = {
       registered = { ids, adapter }
       console.log('[ctx.llm] registerAdapter ids =', ids)
       return () => { console.log('[ctx.llm] released', ids) }
+    },
+    registerConfigurableProviders(rows) {
+      directory = rows
+      console.log('[ctx.llm] registerConfigurableProviders =', JSON.stringify(rows))
+      return () => { console.log('[ctx.llm] directory released') }
     }
   }
 }
@@ -68,6 +74,17 @@ if (!registered) {
 
 const adapter = registered.adapter
 console.log('adapter methods =', Object.getOwnPropertyNames(Object.getPrototypeOf(adapter)).join(', '))
+
+// 模型选择器读的是「可配置 provider 目录」，不是 registerAdapter —— 必须两处都登记
+if (!directory || directory.length === 0) {
+  console.error('FAIL: registerConfigurableProviders 未被调用（模型选择器不会列出它）')
+  process.exit(1)
+}
+if (directory[0].provider !== 'opencode-free' || directory[0].declared !== false) {
+  console.error('FAIL: 目录行内容不对:', JSON.stringify(directory[0]))
+  process.exit(1)
+}
+console.log('✓ 可配置 provider 目录已登记:', directory[0].provider, '| displayName =', directory[0].displayName)
 
 const models = await adapter.listModels('opencode-free')
 console.log('listModels count =', models.length)
