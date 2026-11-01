@@ -160,8 +160,72 @@ node install.mjs --profile web      # 装到 web profile
 | 位置 | 动作 |
 |---|---|
 | `<profile>/node_modules/dsh-opencodeconnect-nokey/` | 复制插件文件 |
-| `<profile>/cordis.patch.yml` | 追加 `- insert:` 挂载行 |
+| `<profile>/cordis.patch.yml` | 追加 `- insert:` 挂载行（含 `inject: [llm]` 与 `config`） |
 | `<profile>/package.json` → `dsh.profile.bundles` | 追加包名 |
+
+### ⚠️ 两条实测踩出来的坑
+
+**坑 1：`[]` 空数组后面不能直接追加**
+
+DSH 新 profile 的 `cordis.patch.yml` 默认内容是 `[]`。直接在后面追加 `- insert:` 会得到非法 YAML：
+
+```
+end of the stream or a document separator is expected
+```
+
+因为 `[]` 已经是完整的 YAML 流式空序列，后面不能再跟数组元素 —— **整个 profile 起不来**。
+`install.mjs` 会先把只有 `[]` 的那行剥掉再从数组根写起；手动安装时你要自己注意。
+
+**坑 2：插件的 `cordis.patch.yml` 不能挂载插件自己**
+
+这是最隐蔽的一个。本仓库早期版本在 `cordis.patch.yml` 里写了一条
+
+```yaml
+- insert:
+    - id: opencodeconnect-nokey
+      name: dsh-opencodeconnect-nokey
+```
+
+结果插件**在 DSH 里静默不加载** —— 没有日志、没有 shim 端口、模型选择器里没有 provider，
+但「插件」页面里它明明显示为**已安装、开关是打开的**。
+
+原因是加载链路套了两层 patch：
+
+1. profile 的 `cordis.patch.yml` 先 insert 本插件（用户侧那三行）
+2. 本插件 `package.json` 的 `dsh.bundle.patch` 又指向插件自带的 `cordis.patch.yml`，
+   loader 把**插件自带的 patch 再叠加一层**
+
+于是同一个 id 被插入两次，第二次是「一个叫 A 的行去 insert 一个叫 A 的行」的自引用。
+**loader 遇到重复 id 不报错，只是不再启动那一行** —— 所以现象是"装了但什么都没发生"。
+
+正确分工（对照 `dsh-xdpool`、`dsh-bili-whale` 等已验证插件）：
+
+- **profile 的 patch 负责挂载插件**（用户侧三行）
+- **插件自带的 patch 只负责插件内部要补充的行**
+
+本插件没有内部子行要注册（provider 是在 `apply()` 里用
+`ctx.llm.registerAdapter()` 动态注册的，不走 loader 行），所以仓库里的
+`cordis.patch.yml` 就是一个空数组 `[]`。`install.mjs` 会原样复制它，你不需要动。
+
+### 装完怎么确认真的在跑
+
+「插件」页面显示"已安装 + 开关打开"**不代表启动成功**（坑 2 就是这样骗过眼睛的）。
+真正可靠的判据是 **shim 端口 + 日志**：
+
+```bash
+# 发一条消息后，插件会有一个自己监听的 127.0.0.1 端口
+# Windows
+Get-NetTCPConnection -State Listen | Where-Object { $_.LocalAddress -eq '127.0.0.1' }
+```
+
+DSH 日志里应该出现：
+
+```
+[opencodeconnect] 使用 CLI: ...\opencode-cli.exe
+[opencodeconnect] shim 监听 127.0.0.1:xxxxx
+[opencodeconnect] provider "opencode-free" 已注册
+[opencodeconnect] 模型目录更新为 8 个: ...
+```
 
 > **为什么不用 `dsh plugin add`**
 >
@@ -178,17 +242,28 @@ node install.mjs --profile web      # 装到 web profile
 
 1. 把 `lib/`、`package.json`、`cordis.patch.yml` 复制到
    `~/.dsh/profiles/desktop/node_modules/dsh-opencodeconnect-nokey/`
+
+   > 注意 `cordis.patch.yml` 复制过去后应该是**空数组 `[]`**（内容照原样，
+   > 别往前加挂载行 —— 见坑 2）。
+
 2. 在 `~/.dsh/profiles/desktop/cordis.patch.yml` **末尾**追加：
 
    ```yaml
    - insert:
        - id: opencodeconnect-nokey
          name: dsh-opencodeconnect-nokey
+         inject: [llm]
+         config:
+           enabled: true
+           displayName: OpenCode Free
+           cliPath: ""
+           timeoutMs: 300000
    ```
 
    > ⚠️ 如果你的 patch 文件内容是空数组 `[]`，**要先把它删掉**再追加。
    > `[]` 已经是完整的 YAML 流式空序列，后面跟 `- insert:` 会变成非法 YAML，
    > profile 直接起不来。`install.mjs` 会自动处理这种情况（有回归测试守着）。
+
 3. 重启 DSH
 
 ### 卸载

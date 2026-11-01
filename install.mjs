@@ -96,7 +96,13 @@ if (patch.includes('id: opencodeconnect-nokey')) {
     `# ${PKG_NAME} —— 把 OpenCode 内置免费模型接入 DSH（无需 API Key）`,
     '- insert:',
     '    - id: opencodeconnect-nokey',
-    `      name: ${PKG_NAME}`
+    `      name: ${PKG_NAME}`,
+    '      inject: [llm]',
+    '      config:',
+    '        enabled: true',
+    '        displayName: OpenCode Free',
+    '        cliPath: ""',
+    '        timeoutMs: 300000'
   ].join('\n')
 
   const body = stripped === '' ? addition + '\n' : stripped + '\n\n' + addition + '\n'

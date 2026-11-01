@@ -1,27 +1,32 @@
 # =============================================================================
-# dsh-opencodeconnect-nokey —— DSH bundle patch
+# dsh-opencodeconnect-nokey —— 插件自带的 bundle patch
 # =============================================================================
-# 只有一个挂载行：宿主侧插件负责把 OpenCode 的免费模型注册成 DSH provider。
+# ⚠️ 这个文件必须是**空数组**，不能在这里挂载插件自己。
 #
-# 本地开发安装：
-#   dsh plugin --profile desktop add "link:C:\\Users\\<你>\\dsh-opencodeconnect-nokey"
-# 发布后安装：
-#   dsh plugin --profile desktop add dsh-opencodeconnect-nokey
+# 踩过的坑：最初这里写了一条
+#     - insert:
+#         - id: opencodeconnect-nokey
+#           name: dsh-opencodeconnect-nokey
+# 结果插件在 DSH 里**静默不加载** —— 没有日志、没有 shim 端口、
+# 模型选择器里也没有 provider。
 #
-# ⚠️ name 必须等于安装后的包名。
+# 原因是加载链路会套两层 patch：
+#   1. profile 的 cordis.patch.yml 先 insert 了本插件（用户侧那三行）
+#   2. 本插件 package.json 的 dsh.bundle.patch 又指向这个文件，
+#      loader 会把插件自带的 patch 再叠加一层
+#
+# 于是同一个 id 被插入了两次，第二次是「一个叫 A 的行去 insert 一个叫 A 的行」
+# 的自引用。loader 遇到重复 id 不报错，只是不再启动那一行。
+#
+# 正确做法（对照 dsh-xdpool / dsh-bili-whale 等已验证插件）：
+#   - profile 的 patch 负责**挂载插件**（用户侧那三行）
+#   - 插件自带的 patch 只负责**插件内部**要补充的行
+#
+# 本插件没有内部子行要注册 —— provider 是在 apply() 里用
+# ctx.llm.registerAdapter() 动态注册的，不走 loader 行。
+# 所以这里就是一个空数组。
+#
+# 保留这个文件（而不是删掉）是因为 package.json 的 dsh.bundle.patch 指向它，
+# loader 期望它存在且可解析。
 # =============================================================================
-
-- insert:
-    - id: opencodeconnect-nokey
-      name: dsh-opencodeconnect-nokey
-      inject: [llm]
-      config:
-        enabled: true
-        # Provider 在模型选择器里显示的名字
-        displayName: OpenCode Free
-        # 自动探测 opencode-cli 的位置；留空则按下方 candidatePaths 顺序查找
-        cliPath: ""
-        # 单次请求超时（毫秒）
-        timeoutMs: 300000
-        # 空闲多久后回收 shim 端口（毫秒）；0 = 不回收
-        idleRecycleMs: 0
+[]

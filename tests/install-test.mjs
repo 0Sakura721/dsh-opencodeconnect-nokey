@@ -167,6 +167,32 @@ for (const c of CASES) {
   }
   console.log('  ✓ 二次安装幂等')
 
+  /**
+   * 7. 插件自带的 cordis.patch.yml 必须是空数组。
+   *
+   * 这是最隐蔽的一个坑：如果插件自带 patch 也挂载插件自己，
+   * loader 会把 profile patch 和插件 patch 叠加，同一个 id 插入两次
+   * （第二层是自引用），loader 不报错但**不再启动该行** ——
+   * 现象就是"插件页面显示已安装、开关打开，但完全没工作"。
+   */
+  const pluginPatchPath = path.join(dir, 'node_modules', 'dsh-opencodeconnect-nokey', 'cordis.patch.yml')
+  try {
+    const pd = yaml.load(fs.readFileSync(pluginPatchPath, 'utf8'))
+    const selfMounts = Array.isArray(pd)
+      ? pd.flatMap((e) => Array.isArray(e?.insert) ? e.insert : []).filter((r) => r?.id === 'opencodeconnect-nokey').length
+      : -1
+    if (selfMounts !== 0) {
+      console.error('  ✗ 插件自带 patch 挂载了自己', selfMounts, '次（应为 0，否则 loader 会静默不启动）')
+      failed++
+      continue
+    }
+  } catch (err) {
+    console.error('  ✗ 插件自带 patch 无法解析:', err.message.split('\n')[0])
+    failed++
+    continue
+  }
+  console.log('  ✓ 插件自带 patch 为空数组（无自引用）')
+
   fs.rmSync(root, { recursive: true, force: true })
 }
 
