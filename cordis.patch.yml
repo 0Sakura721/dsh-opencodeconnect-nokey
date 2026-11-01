@@ -1,0 +1,27 @@
+# =============================================================================
+# dsh-opencodeconnect-nokey —— DSH bundle patch
+# =============================================================================
+# 只有一个挂载行：宿主侧插件负责把 OpenCode 的免费模型注册成 DSH provider。
+#
+# 本地开发安装：
+#   dsh plugin --profile desktop add "link:C:\\Users\\<你>\\dsh-opencodeconnect-nokey"
+# 发布后安装：
+#   dsh plugin --profile desktop add dsh-opencodeconnect-nokey
+#
+# ⚠️ name 必须等于安装后的包名。
+# =============================================================================
+
+- insert:
+    - id: opencodeconnect-nokey
+      name: dsh-opencodeconnect-nokey
+      inject: [llm]
+      config:
+        enabled: true
+        # Provider 在模型选择器里显示的名字
+        displayName: OpenCode Free
+        # 自动探测 opencode-cli 的位置；留空则按下方 candidatePaths 顺序查找
+        cliPath: ""
+        # 单次请求超时（毫秒）
+        timeoutMs: 300000
+        # 空闲多久后回收 shim 端口（毫秒）；0 = 不回收
+        idleRecycleMs: 0
