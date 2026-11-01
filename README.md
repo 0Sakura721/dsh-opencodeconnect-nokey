@@ -411,6 +411,77 @@ DSH 界面选档
 > 覆盖上去。只写支持的那几个，会让 `off`/`minimal`/`medium` 也出现在界面上。
 
 ---
+## 工具调用（tool calling）
+
+**已实现，解析层与传递层全部测通；端到端复验被免费额度挡住（见文末状态）。**
+
+### 难点在哪
+
+`opencode-cli` 自带**完整 agent loop**：模型说要读文件，它就真读，还把结果回灌给模型继续。
+实测证据（build agent）：
+
+```
+{"type":"tool_use","part":{"tool":"read","state":{"status":"completed","output":"..."}}}
+{"type":"tool_use","part":{"tool":"shell","state":{...}}}       ← 连 shell 都跑了
+```
+
+这跟 DSH 的期望正好冲突 —— DSH 要自己做工具执行（它有权限系统、自己的工具集、
+要给人看审批 UI）。而官方 `generate/text` 端点只收 `{prompt, model}`，**没有 tools 参数**。
+
+### 怎么绕过去的
+
+1. **禁掉 opencode 自己的工具** —— 在隔离 HOME 里写 `permission` 全 deny，
+   让它没有可执行的东西。实测 `debug config` 确认解析成
+   `permissions: [{action:'read',effect:'deny'}, {action:'shell',...}, ...]`
+2. **把 DSH 的 tools 译成提示词** —— 直接给 JSON schema（比自然语言描述更准），
+   要求模型用 `<tool_call>{"name":...,"arguments":{...}}</tool_call>` 输出
+3. **解析回 OpenAI 的 `tool_calls`** —— 交给 DSH 自己执行
+
+实测模型严格守约：
+
+```
+输入：`<functions>[...]</functions>` + 「只输出 <tool_call>…</tool_call>」
+输出：`<tool_call>{"name":"read_file","arguments":{"path":"C:/temp/a.txt"}}</tool_call>`
+      —— 没有多余散文，JSON 可解析
+```
+
+### 解析是宽容的
+
+模型不一定每次都听话，所以 `lib/tool-calling.js` 依次尝试：标准标记 → 裸 JSON →
+` ```json ` 代码块 → 原文里第一段括号配平的 JSON。都不行就当纯文本回答，
+**绝不因为"客户端传了 tools"就把普通回答报成错误**。
+
+`tests/tool-protocol.mjs` 覆盖 23 种情况（含"散文里带 JSON 但不是调用"这种误报陷阱）。
+
+### 流式下 tool_calls 的形状
+
+按 OpenAI 协议分两段下发，缺一段 DSH 会把结果回填到错误的调用上：
+
+```
+1. delta.tool_calls[i] = { index, id, type, function.name }    ← 只有名字
+2. delta.tool_calls[i] = { index, function.arguments }         ← 完整 JSON 字符串
+```
+
+### 当前状态（重要）
+
+| 层 | 状态 | 验证方式 |
+|---|---|---|
+| 协议渲染 + 解析 + 转 OpenAI 结构 | ✅ 通过 | `node tests/tool-protocol.mjs`（23 项，零额度） |
+| shim 集成（非流式/流式/不误报/无 tools 不污染） | ✅ 通过 | `node tests/tool-shim.mjs`（假 CLI，零额度） |
+| 禁用 opencode 内置工具 | ✅ 配置已写入 | `debug config` 显示全 deny |
+| **模型真实遵守协议输出 tool_call** | ✅ 已验证 | 手工实测，见上文输出 |
+| **端到端：DSH 发工具 → 模型调用 → DSH 执行** | ⏳ **待复验** | 被免费额度挡住（`retryAfterMs` 约 16 小时） |
+
+额度恢复后跑这条确认：
+
+```bash
+ELECTRON_RUN_AS_NODE=1 "D:\DeepSeek Harness\DeepSeek Harness.exe" tests/real-inference.mjs
+```
+
+然后在 DSH 里让 agent 做一件需要读文件的事，看它是否真的调用工具而不是自己瞎编。
+
+---
+
 ## 已知限制
 
 | 限制 | 原因 | 影响 |
@@ -419,7 +490,7 @@ DSH 界面选档
 | **不支持图片输入** | CLI 的 `run` 通道只传文本 | 模型标了 `image` 能力，但图片会被丢弃 |
 | **首字节延迟 3–5 秒** | CLI 是事件级流（step_start→text→step_finish），不是 token 级 | shim 会等文本到齐后按标点切块下发 SSE；不是逐字流 |
 | ~~prompt 长度受命令行限制~~ | 已修复：长 prompt 改走 stdin | DSH 的 system prompt 动辄上万字，argv 会 `ENAMETOOLONG` |
-| **不支持工具调用** | CLI 单轮 message 通道 | 推理等级可用，但 agent 工具链跑不通 |
+| 工具调用需模型配合输出标记 | opencode 内置 agent loop，得先禁掉它自己的工具 | 见下节「工具调用」，解析层已测通，端到端待额度可用时复验 |
 | **额度由 OpenCode 账号决定** | 免费额度是上游控制的 | 用尽后返回 `FreeUsageLimitError`，插件会把原文透出给用户 |
 | **依赖本机装有 OpenCode** | 推理必须由官方 CLI 发起 | 没装 OpenCode 时插件记一条 error 并静默不注册 provider |
 
