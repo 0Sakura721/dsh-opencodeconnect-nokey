@@ -368,6 +368,49 @@ node tools/diagnose.mjs
 
 ---
 
+## 推理等级（thinking effort）
+
+部分免费模型支持调节思考强度。在 DSH 里选中模型后，输入框下方的**「推理等级」**
+就是它 —— 但只在该模型真的支持时才出现。
+
+各模型的可选档位（实采自上游，各不相同）：
+
+| 模型 | 可选档位 |
+|---|---|
+| `deepseek-v4.1-flash-free` | `low` / `high` / `max` |
+| `glm-5.3-flash-free` | `low` / `high` / `max` |
+| `flint-40b-free` | `low` / `medium` / `high` / `xhigh` |
+| `beam-free` | `low` / `medium` / `high` / `xhigh` |
+| `nemotron-3.5-super-vl-free` | `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` |
+| `big-pickle` · `mimo-v2.6-flash-free` · `nemotron-3.5-lightning-free` | 不支持（无选择器） |
+
+档位确实生效，用 `reasoning_tokens` 可验证（同一道推理题）：
+
+```
+variant=low    reasoning_tokens=30
+variant=high   reasoning_tokens=50
+variant=max    reasoning_tokens=33
+```
+
+没有这个档位的模型**不会出现**「推理等级」选项 —— 这是刻意的：
+给 deepseek 传 `off` 会被上游直接拒绝（`Variant unavailable`）。
+
+### 传递链路
+
+```
+DSH 界面选档
+  → 模型描述里的 reasoning + thinkingLevelMap（决定列出哪几档）
+  → pi-ai 写进请求体 reasoning_effort
+  → 本插件 shim 读到后转成 --model opencode/<id>#<variant>
+  → opencode-cli 用它选上游 variant
+```
+
+> ⚠️ 这里有个容易踩的坑：宿主 `getSupportedThinkingLevels()` 判断"不支持"时
+> **只认显式的 `null`**，`undefined` 会被当成"支持"。所以 `thinkingLevelMap`
+> 必须把每个标准档位都写出来 —— 先全部钉成 `null`，再把模型真正拥有的档位
+> 覆盖上去。只写支持的那几个，会让 `off`/`minimal`/`medium` 也出现在界面上。
+
+---
 ## 已知限制
 
 | 限制 | 原因 | 影响 |
@@ -376,6 +419,7 @@ node tools/diagnose.mjs
 | **不支持图片输入** | CLI 的 `run` 通道只传文本 | 模型标了 `image` 能力，但图片会被丢弃 |
 | **首字节延迟 3–5 秒** | CLI 是事件级流（step_start→text→step_finish），不是 token 级 | shim 会等文本到齐后按标点切块下发 SSE；不是逐字流 |
 | ~~prompt 长度受命令行限制~~ | 已修复：长 prompt 改走 stdin | DSH 的 system prompt 动辄上万字，argv 会 `ENAMETOOLONG` |
+| **不支持工具调用** | CLI 单轮 message 通道 | 推理等级可用，但 agent 工具链跑不通 |
 | **额度由 OpenCode 账号决定** | 免费额度是上游控制的 | 用尽后返回 `FreeUsageLimitError`，插件会把原文透出给用户 |
 | **依赖本机装有 OpenCode** | 推理必须由官方 CLI 发起 | 没装 OpenCode 时插件记一条 error 并静默不注册 provider |
 
